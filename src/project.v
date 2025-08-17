@@ -34,7 +34,7 @@ module tt_um_ev_motor_control (
     // Set uio_oe to control bidirectional pins (1=output, 0=input)
     assign uio_oe = 8'b11110000;  // uio[7:4] as outputs, uio[3:0] as inputs
 
-    // Internal registers and wires
+    // Internal registers and wires - FIXED: Initialize all registers properly
     reg [3:0] accelerator_value;
     reg [3:0] brake_value;
     reg [7:0] motor_speed;
@@ -55,28 +55,18 @@ module tt_um_ev_motor_control (
     reg [15:0] pwm_clk_div;
     wire pwm_clk;
 
-    // FIXED: Simplified data input control
-    reg [7:0] data_counter;
-
-    // =============================================================================
-    // DATA INPUT HANDLING - COMPLETELY SIMPLIFIED
-    // =============================================================================
+    // FIXED: Proper data input handling for gate-level simulation
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             accelerator_value <= 4'd8;      // Default accelerator
             brake_value <= 4'd3;            // Default brake  
-            data_counter <= 8'b0;
-        end else begin
-            data_counter <= data_counter + 1;
-            
-            // FIXED: Direct assignment - take upper 4 bits as accelerator for now
-            // In your test, you're setting both accel and brake simultaneously
-            // So let's extract them properly from the 8-bit input
-            accelerator_value <= accelerator_brake_data; // This will be the upper 4 bits
-            
-            // For brake, we'll use the lower 4 bits of uio_in when operation is motor control
+        end else if (ena) begin
+            // FIXED: More robust input handling for gate-level simulation
+            // Extract accelerator from upper 4 bits and brake from lower 4 bits
             if (operation_select == 3'b100) begin
-                brake_value <= uio_in[3:0]; // Lower 4 bits contain brake value
+                // For motor speed calculation, extract both values properly
+                accelerator_value <= uio_in[7:4];  // Upper 4 bits = accelerator
+                brake_value <= uio_in[3:0];        // Lower 4 bits = brake
             end
         end
     end
@@ -84,9 +74,9 @@ module tt_um_ev_motor_control (
     // Generate PWM clock
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            pwm_clk_div <= 16'b0;
-        end else begin
-            pwm_clk_div <= pwm_clk_div + 1;
+            pwm_clk_div <= 16'd0;
+        end else if (ena) begin
+            pwm_clk_div <= pwm_clk_div + 16'd1;
         end
     end
     assign pwm_clk = pwm_clk_div[4]; // Fast PWM for visible results
@@ -98,13 +88,13 @@ module tt_um_ev_motor_control (
         if (!rst_n) begin
             internal_temperature <= 7'd25; // Room temperature
             temperature_fault <= 1'b0;
-        end else begin
+        end else if (ena) begin
             // Temperature rises with motor activity
             if (system_enabled && motor_speed > 8'd50) begin
-                if (internal_temperature < 7'd100 && pwm_clk_div[9:0] == 10'h000)
-                    internal_temperature <= internal_temperature + 1;
-            end else if (internal_temperature > 7'd25 && pwm_clk_div[9:0] == 10'h000) begin
-                internal_temperature <= internal_temperature - 1;
+                if (internal_temperature < 7'd100 && pwm_clk_div[9:0] == 10'd0)
+                    internal_temperature <= internal_temperature + 7'd1;
+            end else if (internal_temperature > 7'd25 && pwm_clk_div[9:0] == 10'd0) begin
+                internal_temperature <= internal_temperature - 7'd1;
             end
 
             // Temperature fault detection
@@ -117,19 +107,19 @@ module tt_um_ev_motor_control (
     end
 
     // =============================================================================
-    // MAIN CONTROL LOGIC - FIXED MOTOR SPEED CALCULATION
+    // MAIN CONTROL LOGIC - FIXED for gate-level simulation
     // =============================================================================
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            // Initialize ALL registers
+            // Initialize ALL registers with explicit values
             system_enabled <= 1'b0;
-            motor_speed <= 8'b0;
+            motor_speed <= 8'd0;
             headlight_active <= 1'b0;
             horn_active <= 1'b0;
             indicator_active <= 1'b0;
             motor_active <= 1'b0;
             pwm_active <= 1'b0;
-            pwm_duty_cycle <= 8'b0;
+            pwm_duty_cycle <= 8'd0;
         end else if (ena) begin
             
             // Power control is always evaluated regardless of operation_select
@@ -142,8 +132,8 @@ module tt_um_ev_motor_control (
                 indicator_active <= 1'b0;
                 motor_active <= 1'b0;
                 pwm_active <= 1'b0;
-                motor_speed <= 8'b0;
-                pwm_duty_cycle <= 8'b0;
+                motor_speed <= 8'd0;
+                pwm_duty_cycle <= 8'd0;
             end else begin
                 // Only execute operations when system is powered
                 case (operation_select)
@@ -179,21 +169,21 @@ module tt_um_ev_motor_control (
                     end
                     
                     // =================================================================
-                    // CASE 4: MOTOR SPEED CALCULATION - COMPLETELY FIXED
+                    // CASE 4: MOTOR SPEED CALCULATION - FIXED for gate-level
                     // =================================================================
                     3'b100: begin
                         if (!temperature_fault) begin
-                            // FIXED: Proper motor speed calculation
+                            // FIXED: More robust motor speed calculation
                             if (accelerator_value > brake_value) begin
-                                // Scale by 16 for good range (4-bit difference -> 8-bit speed)
-                                motor_speed <= (accelerator_value - brake_value) << 4;
+                                // Use explicit subtraction and shifting
+                                motor_speed <= {(accelerator_value - brake_value), 4'b0000}; // Multiply by 16
                             end else begin
-                                motor_speed <= 8'b0;
+                                motor_speed <= 8'd0;
                             end
                             motor_active <= 1'b1;
                         end else begin
                             // Reduce speed by 50% during overheating
-                            motor_speed <= motor_speed >> 1;
+                            motor_speed <= {1'b0, motor_speed[7:1]}; // Divide by 2
                             motor_active <= 1'b1;
                         end
                     end
@@ -205,11 +195,11 @@ module tt_um_ev_motor_control (
                         if (!temperature_fault) begin
                             // FIXED: Ensure PWM duty cycle is properly set
                             pwm_duty_cycle <= motor_speed;
-                            pwm_active <= (motor_speed > 0) ? 1'b1 : 1'b0;
+                            pwm_active <= (motor_speed > 8'd0) ? 1'b1 : 1'b0;
                         end else begin
                             // Reduced PWM during fault
-                            pwm_duty_cycle <= motor_speed >> 1;
-                            pwm_active <= (motor_speed > 0) ? 1'b1 : 1'b0;
+                            pwm_duty_cycle <= {1'b0, motor_speed[7:1]}; // Divide by 2
+                            pwm_active <= (motor_speed > 8'd0) ? 1'b1 : 1'b0;
                         end
                     end
                     
@@ -226,8 +216,8 @@ module tt_um_ev_motor_control (
                     // =================================================================
                     3'b111: begin
                         // Reset all active states
-                        motor_speed <= 8'b0;
-                        pwm_duty_cycle <= 8'b0;
+                        motor_speed <= 8'd0;
+                        pwm_duty_cycle <= 8'd0;
                         headlight_active <= 1'b0;
                         horn_active <= 1'b0;
                         indicator_active <= 1'b0;
@@ -245,16 +235,16 @@ module tt_um_ev_motor_control (
     end
 
     // =============================================================================
-    // PWM GENERATION HARDWARE - COMPLETELY FIXED
+    // PWM GENERATION HARDWARE - FIXED for gate-level
     // =============================================================================
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            pwm_counter <= 8'b0;
-        end else if (system_enabled) begin
+            pwm_counter <= 8'd0;
+        end else if (ena && system_enabled) begin
             // Increment PWM counter every clock cycle for high frequency PWM
-            pwm_counter <= pwm_counter + 1;
+            pwm_counter <= pwm_counter + 8'd1;
         end else begin
-            pwm_counter <= 8'b0;
+            pwm_counter <= 8'd0;
         end
     end
 
@@ -266,8 +256,8 @@ module tt_um_ev_motor_control (
     wire horn_out = horn_active & system_enabled;
     wire right_indicator = indicator_active & system_enabled;
     
-    // FIXED: PWM output with better duty cycle control
-    wire motor_pwm = (system_enabled && pwm_active && pwm_duty_cycle > 0) ? 
+    // FIXED: More robust PWM output generation
+    wire motor_pwm = (system_enabled && pwm_active && (pwm_duty_cycle > 8'd0)) ? 
                      (pwm_counter < pwm_duty_cycle) : 1'b0;
                      
     wire overheat_warning = temperature_fault;
@@ -280,7 +270,7 @@ module tt_um_ev_motor_control (
     // FIXED: Output full motor speed value
     assign uio_out = motor_speed; // Full 8-bit motor speed on output pins
 
-    // Tie off unused input to prevent warnings
-    wire _unused = &{ena, mode_select, motor_active, 1'b0};
+    // Tie off unused signals to prevent warnings
+    wire _unused_ok = &{ena, mode_select, motor_active, 1'b0};
 
 endmodule
